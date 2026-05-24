@@ -17,3 +17,5 @@ env_logger = "0.10"
 anyhow = "1.0"
 dirs = "5.0"
 ctrlc = "3.0"
+dioxus = { version = "0.5", features = ["desktop"] }
+dioxus-desktop = "0.5"

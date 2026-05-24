@@ -64,15 +64,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up system tray
     let is_running = Arc::new(AtomicBool::new(true));
-    let is_running_clone = is_running.clone();
 
     // If minimized flag is set or no explicit mode requested, start in tray mode (default)
     if cli.minimized {
         info!("Starting in minimized mode with system tray");
-        setup_tray(&cli.session, &is_running_clone);
+        setup_tray(&cli.session, &is_running);
     } else {
         // Default startup behavior - tray mode with GUI option
-        setup_tray(&cli.session, &is_running_clone);
+        setup_tray(&cli.session, &is_running);
         info!("Starting with system tray interface");
         // In a real implementation, we would also launch the GUI here
     }
@@ -93,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn setup_tray(session_name: &str, is_running: &Arc<AtomicBool>) {
+fn setup_tray(session_name: &str, _is_running: &Arc<AtomicBool>) {
     // We'll use the tray-icon for system tray functionality
     info!("Creating system tray icon for session: {}", session_name);
     // Note: The actual implementation would require handling tray events with proper event loop

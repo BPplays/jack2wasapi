@@ -6,6 +6,9 @@ use std::time::Duration;
 use clap::Parser;
 use log::{info, error};
 use serde::{Deserialize, Serialize};
+use env_logger::{Builder, Target};
+use log::LevelFilter;
+use log::LevelFilter::*;
 
 mod audio_bridge;
 
@@ -16,7 +19,7 @@ struct Config {
 }
 
 #[derive(Parser)]
-#[clap(name = "jack2wsapi", version = "0.1.0")]
+#[clap(name = "jack2wasapi", version = "0.1.0")]
 struct Cli {
     /// Start minimized in system tray
     #[clap(long)]
@@ -32,19 +35,22 @@ struct Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-    info!("Starting jack2wsapi");
+    Builder::new()
+        .filter_level(LevelFilter::Info)
+        .target(Target::Stdout)
+        .init();
+    info!("Starting jack2wasapi");
 
     let cli = Cli::parse();
     info!("Session: {}, Buffer size: {}", cli.session, cli.buffer_size);
-    
+
     let config_dir = get_config_dir(&cli.session)?;
     let config_file = config_dir.join("config.json");
-    
+
     let mut config = load_config(&config_file)?;
     config.buffer_size = cli.buffer_size;
     save_config(&config_file, &config)?;
-    
+
     // Create audio bridge and start it
     let mut bridge = audio_bridge::AudioBridge::new();
     match bridge.start(&cli.session, cli.buffer_size) {
@@ -56,11 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(e);
         }
     };
-    
+
     // Main thread logic
     let is_running = Arc::new(AtomicBool::new(true));
     let is_running_clone = is_running.clone();
-    
+
     // Main thread - wait for Ctrl+C or signal
     if cli.minimized {
         info!("Running minimized (system tray would go here).");
@@ -81,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_running.store(false, Ordering::Relaxed);
         })?;
     }
-    
+
     // Stop bridge before exiting
     bridge.stop();
     info!("Application shutdown complete");

@@ -950,7 +950,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jack2wsapi"
+name = "jack2wasapi"
 version = "0.1.0"
 dependencies = [
  "anyhow",

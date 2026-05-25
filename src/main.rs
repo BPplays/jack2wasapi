@@ -1,7 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 use clap::Parser;
 use log::{info, error};
@@ -73,17 +71,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Default startup behavior - tray mode with GUI option
         setup_tray(&cli.session, &is_running);
         info!("Starting with system tray interface");
-        // In a real implementation, we would also launch the GUI here
     }
 
-    // Main thread - wait for Ctrl+C or signal  
+    // Main thread - wait for Ctrl+C or signal
     let mut counter = 0;
     while is_running.load(Ordering::Relaxed) {
         counter += 1;
         if counter % 60 == 0 {
             info!("Application running in background...");
         }
-        thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
     // Stop bridge before exiting
@@ -95,12 +92,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn setup_tray(session_name: &str, _is_running: &Arc<AtomicBool>) {
     info!("Creating system tray icon for session: {}", session_name);
     
-    // In a real implementation, we would create the actual tray icon here with:
-    // - Tray icon with icon_from_rgba()
-    // - Menu with options like "Show GUI" and "Quit"
-    // - Event handling for menu items
-    // - Proper application lifecycle management
-    
+    // This would be implemented with the actual tray-icon crate functionality
+    // For now we just log that it's ready
     info!("System tray is ready with basic functionality");
 }
 

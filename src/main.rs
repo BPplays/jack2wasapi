@@ -8,6 +8,7 @@ use env_logger::{Builder, Target};
 use log::LevelFilter;
 
 mod audio_bridge;
+mod gui;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -66,11 +67,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // If minimized flag is set or no explicit mode requested, start in tray mode (default)
     if cli.minimized {
         info!("Starting in minimized mode with system tray");
-        setup_tray(&cli.session, &is_running);
+        gui::run(true);
     } else {
-        // Default startup behavior - tray mode with GUI option
-        setup_tray(&cli.session, &is_running);
-        info!("Starting with system tray interface");
+        gui::run(false);
+        info!("starting gui");
     }
 
     // Main thread - wait for Ctrl+C or signal
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn setup_tray(session_name: &str, _is_running: &Arc<AtomicBool>) {
     info!("Creating system tray icon for session: {}", session_name);
-    
+
     // This would be implemented with the actual tray-icon crate functionality
     // For now we just log that it's ready
     info!("System tray is ready with basic functionality");

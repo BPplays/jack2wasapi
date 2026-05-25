@@ -25,7 +25,7 @@ const SEARCH_ITEMS: &[&str] = &[
 
 #[component]
 fn app() -> Element {
-    let mut normal_selected = use_signal(|| NORMAL_ITEMS[0].to_string());
+    let mut buffer_size_selected = use_signal(|| NORMAL_ITEMS[0].to_string());
     let mut search_text = use_signal(String::new);
     let mut fuzzy_selected = use_signal(|| SEARCH_ITEMS[0].to_string());
 
@@ -45,8 +45,14 @@ fn app() -> Element {
             div { style: "margin-bottom: 16px;",
                 div { "Normal dropdown" }
                 select {
-                    value: "{normal_selected}",
-                    oninput: move |event| normal_selected.set(event.value()),
+                    value: "{buffer_size_selected}",
+                    oninput: move |event| {
+                        let value = event.value();
+                        buffer_size_selected.set(value.clone());
+
+                        // run event here
+                        info!("buffer size changed -> {value}");
+                    },
                     for item in NORMAL_ITEMS {
                         option {
                             value: "{item}",
@@ -62,7 +68,10 @@ fn app() -> Element {
                     r#type: "text",
                     placeholder: "Type to filter...",
                     value: "{search_text}",
-                    oninput: move |event| search_text.set(event.value()),
+                    oninput: move |event| {
+                        let value = event.value();
+                        search_text.set(value.clone());
+                    },
                 }
 
                 div { style: "border: 1px solid #ccc; margin-top: 8px; max-height: 180px; overflow: auto;",
@@ -72,6 +81,9 @@ fn app() -> Element {
                             onmousedown: move |_| {
                                 fuzzy_selected.set(item.to_string());
                                 search_text.set(item.to_string());
+
+                                let value = item.to_string();
+                                info!("audio device changed -> {value}");
                             },
                             "{item}"
                         }

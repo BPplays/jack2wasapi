@@ -30,9 +30,7 @@ impl AudioBridge {
         }
     }
 
-    pub fn start(&mut self, session_name: &str, buffer_size: u32) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Starting audio bridge for session '{}'", session_name);
-
+    pub fn start(&mut self, wanted_output: &str, buffer_size: u32) -> Result<(), Box<dyn std::error::Error>> {
         // Set running flag to true
         self.is_running.store(true, Ordering::Relaxed);
 
@@ -47,17 +45,35 @@ impl AudioBridge {
 
         // Placeholder showing what would happen in a proper implementation:
         info!("Audio bridge configuration:");
-        info!("  Session: {}", session_name);
         info!("  Buffer size: {}", buffer_size);
         info!("  JACK integration: Placeholder (would connect to JACK server)");
-        info!("  WASAPI integration: Placeholder (would connect to WASAPI output)");
+        info!("  WASAPI output: {}", wanted_output);
         let host = cpal::default_host();
 
-        let device = host
-            .default_output_device()
-            .expect("no output device available");
+        let selected = host
+            .output_devices()? // this is usually a Result<Devices, _>
+            .find_map(|device| {
+                let desc = description_to_string(device.description()).ok()?;
+                if desc == wanted_output {
+                    Some(device)
+                } else {
+                    None
+                }
+            });
 
-        info!("Output device: {}", device.description()?);
+        match selected {
+            Some(device) => {
+                println!("matched device: {}",
+                    description_to_string(device.description())
+                    .unwrap()
+                );
+                // use `device` here
+                }
+            None => {
+                println!("no matching device found");
+                }
+        }
+
 
         // This is where the actual bridge code would go
         // For now, we just simulate starting it

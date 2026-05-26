@@ -20,13 +20,9 @@ struct Config {
 #[derive(Parser)]
 #[clap(name = "jack2wasapi", version = "0.1.0")]
 struct Cli {
-    /// Start minimized in system tray
-    #[clap(long)]
-    minimized: bool,
-
     /// Session name for config storage
-    #[clap(long, default_value = "default")]
-    session: String,
+    #[clap(long, default_value = "")]
+    output: String,
 
     /// Buffer size for audio (default 64)
     #[clap(long, default_value = "64")]
@@ -72,18 +68,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    info!("Session: {}, Buffer size: {}", cli.session, cli.buffer_size);
-
-    let config_dir = get_config_dir(&cli.session)?;
-    let config_file = config_dir.join("config.json");
-
-    let mut config = load_config(&config_file)?;
-    config.buffer_size = cli.buffer_size;
-    save_config(&config_file, &config)?;
+    info!("Output: {}, Buffer size: {}", cli.output, cli.buffer_size);
 
     // Create audio bridge and start it
     let mut bridge = audio_bridge::AudioBridge::new();
-    match bridge.start(&cli.session, cli.buffer_size) {
+    match bridge.start(&cli.output, cli.buffer_size) {
         Ok(_) => {
             info!("Audio bridge started successfully");
         }

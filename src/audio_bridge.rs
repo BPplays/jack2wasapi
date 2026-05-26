@@ -174,7 +174,7 @@ impl AudioBridge {
 
                 let mut resampler = match Async::<f32>::new_sinc(
                     base_ratio,
-                    1.056,
+                    1.256,
                     &params,
                     jack_period,
                     1,
@@ -233,28 +233,18 @@ impl AudioBridge {
                         }
                     }
 
-                    let over = input_overruns.swap(0, Ordering::Relaxed);
-                    let under = output_underruns.swap(0, Ordering::Relaxed);
-                    let net = over as i64 - under as i64;
-                    // let net = under as i64 - over as i64;
+                    let out_filled = out_cons.len();
+                    let midpoint = output_capacity_samples / 2;
+                    let delta = out_filled as i64 - midpoint as i64; // + if above midpoint, - if below
+                    let drift_ratio = delta as f64 / (output_capacity_samples / 2) as f64;
 
-                    if net != 0 {
-                        let drift_ratio = net as f64 / jack_period as f64;
-                        let correction = 1.0 + drift_ratio * 0.5;
-                        let new_ratio = (base_ratio * correction)
-                            .clamp(base_ratio * (
-                                1_f64 + (1_f64 - 1.005)
-                            ), base_ratio * 1.005);
-
-                        if (new_ratio - current_ratio).abs() > 1e-9 {
-                            if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {
-                                warn!("failed to retune resampler ratio: {err}");
-                            } else {
-                                info!("resample ratio set: {}", new_ratio);
-                                current_ratio = new_ratio;
-                            }
-                        }
-                    }
+                    // drift_ratio > 0 → buffer filling → ratio too high → decrease
+                    // drift_ratio < 0 → buffer draining → ratio too low → increase
+                    let correction = 1.0 - drift_ratio * 0.5;
+                    let new_ratio = (base_ratio * correction).clamp(
+                        base_ratio * 0.995,
+                        base_ratio * 1.005
+                    );
 
                     if out_frames_next == 0 {
                         thread::sleep(Duration::from_micros(500));

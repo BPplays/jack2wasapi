@@ -368,7 +368,12 @@ impl jack::ProcessHandler for JackProcess {
         if written < input.len() {
             let dropped = input.len() - written;
             self.overruns.fetch_add(dropped as u64, Ordering::Relaxed);
-            warn!("input ring buffer full — dropped {} samples", dropped);
+            warn!(
+                "input ring buffer full — dropped {} samples; occupied: {} | vacant: {}",
+                dropped,
+                self.producer.occupied_len(),
+                self.producer.vacant_len(),
+            );
         }
 
         Control::Continue

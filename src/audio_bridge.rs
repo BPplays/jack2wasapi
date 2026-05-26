@@ -232,7 +232,8 @@ impl AudioBridge {
 
                     let over = input_overruns.swap(0, Ordering::Relaxed);
                     let under = output_underruns.swap(0, Ordering::Relaxed);
-                    let net = over as i64 - under as i64;
+                    // let net = over as i64 - under as i64;
+                    let net = under as i64 - over as i64;
 
                     if net != 0 {
                         let drift_ratio = net as f64 / jack_period as f64;

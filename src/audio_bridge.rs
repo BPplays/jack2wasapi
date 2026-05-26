@@ -160,8 +160,6 @@ impl AudioBridge {
         let jack_client = client.activate_async((), jack_process)?;
         self.jack_client = Some(jack_client);
 
-        let out_cons = Arc::new(out_cons);
-        let out_cons_thread = Arc::clone(&out_cons);
         let running = self.is_running.clone();
         let resample_thread = {
             let output_underruns = output_underruns.clone();
@@ -238,7 +236,8 @@ impl AudioBridge {
                         }
                     }
 
-                    let out_filled = out_cons_thread.occupied_len();
+                    // let out_filled = out_cons.occupied_len();
+                    let out_filled = in_cons.occupied_len();
                     let out_filled = out_filled;
                     let midpoint = output_capacity_samples / 2;
                     let delta = out_filled as i64 - midpoint as i64; // + if above midpoint, - if below
@@ -251,6 +250,14 @@ impl AudioBridge {
                         base_ratio * 0.995,
                         base_ratio * 1.005
                     );
+                    if (new_ratio - current_ratio).abs() > 1e-9 {
+                        if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {
+                            warn!("failed to retune resampler ratio: {err}");
+                        } else {
+                            info!("resample ratio set: {}", new_ratio);
+                            current_ratio = new_ratio;
+                        }
+                    }
 
                     if out_frames_next == 0 {
                         thread::sleep(Duration::from_micros(500));
@@ -357,7 +364,7 @@ fn build_output_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
-    mut consumer: Arc<HeapCons<f32>>,
+    mut consumer: HeapCons<f32>,
     underruns: Arc<AtomicU64>,
     mut err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream, BuildStreamError>

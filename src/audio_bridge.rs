@@ -241,7 +241,7 @@ impl AudioBridge {
 
                     let filled = out_prod.occupied_len() as f64;
                     let capacity = output_capacity_samples as f64;
-                    info!("filled {}; cap {}", filled, capacity);
+                    // info!("filled {}; cap {}", filled, capacity);
 
                     if capacity <= 0.0 {
                         return;
@@ -257,7 +257,7 @@ impl AudioBridge {
                     // invert the signal here:
                     let control = -scaled;
 
-                    info!("ctrl {}", control);
+                    // info!("ctrl {}", control);
 
                     // Map control [-1, 1] to ratio range [min_ratio, max_ratio]
                     let min_ratio = base_ratio * 0.995;
@@ -269,7 +269,7 @@ impl AudioBridge {
                         if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {
                             warn!("failed to retune resampler ratio: {err}");
                         } else {
-                            info!("resample ratio set: {}", new_ratio);
+                            // info!("resample ratio set: {}", new_ratio);
                             current_ratio = new_ratio;
                         }
                     }

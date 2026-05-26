@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 jack = "0.13"
-cpal = { version = "0.17", features = ["audio_thread_priority", "jack"] }
+cpal = { version = "0.17", features = ["asio", "audio_thread_priority", "jack"] }
 clap = { version = "4.5", features = ["derive"] }
 tray-icon = "0.14"
 ringbuf = "0.2"

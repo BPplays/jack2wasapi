@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use cpal::traits::{DeviceTrait, HostTrait};
 
 use clap::Parser;
 use log::{info, error};
@@ -30,6 +31,9 @@ struct Cli {
     /// Buffer size for audio (default 64)
     #[clap(long, default_value = "64")]
     buffer_size: u32,
+
+    #[arg(long)]
+    list: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,6 +44,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting jack2wasapi");
 
     let cli = Cli::parse();
+
+    if cli.list {
+        println!("Listing items...");
+        let host = cpal::default_host();
+
+        println!("=== INPUT ===");
+        for d in host.input_devices()? {
+            println!(
+                "IN  : {} |",
+                audio_bridge::description_to_string(d
+                    .description())
+                    .unwrap_or("unknown"
+                    .to_string()),
+            );
+        }
+
+        println!("\n=== OUTPUT ===");
+        for d in host.output_devices()? {
+            println!(
+                "OUT : {} |",
+                audio_bridge::description_to_string(d
+                    .description())
+                    .unwrap_or("unknown"
+                    .to_string()),
+            );
+        }
+        return Ok(());
+    }
     info!("Session: {}, Buffer size: {}", cli.session, cli.buffer_size);
 
     let config_dir = get_config_dir(&cli.session)?;
@@ -64,14 +96,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set up system tray
     let is_running = Arc::new(AtomicBool::new(true));
 
-    // If minimized flag is set or no explicit mode requested, start in tray mode (default)
-    if cli.minimized {
-        info!("Starting in minimized mode with system tray");
-        gui::run(true);
-    } else {
-        gui::run(false);
-        info!("starting gui");
-    }
+    // // If minimized flag is set or no explicit mode requested, start in tray mode (default)
+    // if cli.minimized {
+    //     info!("Starting in minimized mode with system tray");
+    //     gui::run(true);
+    // } else {
+    //     gui::run(false);
+    //     info!("starting gui");
+    // }
 
     // Main thread - wait for Ctrl+C or signal
     let mut counter = 0;

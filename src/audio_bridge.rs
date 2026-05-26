@@ -177,7 +177,7 @@ impl AudioBridge {
 
                 let mut resampler = match Async::<f32>::new_sinc(
                     base_ratio,
-                    1.256,
+                    1.856,
                     &params,
                     jack_period,
                     1,
@@ -198,6 +198,7 @@ impl AudioBridge {
                 let mut current_ratio = base_ratio;
 
 
+                let mut loops = 0;
                 while running.load(Ordering::Relaxed) {
                     for s in &mut in_buf[0] {
                         loop {
@@ -219,29 +220,12 @@ impl AudioBridge {
 
                     let out_frames_next = resampler.output_frames_next();
 
-                    match resampler.process_into_buffer(&input, &mut output, None) {
-                        Ok((_used_in, produced_out)) => {
-                            let pushed = out_prod.push_slice(&out_buf[0][..produced_out]);
-                            if pushed < produced_out {
-                                warn!(
-                                    "output ring full — dropped {} samples",
-                                    produced_out - pushed
-                                );
-                            }
-                        }
-                        Err(err) => {
-                            warn!("rubato resample error: {err}");
-                            // thread::sleep(Duration::from_millis(1));
-                            continue;
-                        }
-                    }
 
                     // let out_filled = out_cons.occupied_len();
 
 
                     let filled = out_prod.occupied_len() as f64;
                     let capacity = output_capacity_samples as f64;
-                    // info!("filled {}; cap {}", filled, capacity);
 
                     if capacity <= 0.0 {
                         return;
@@ -257,11 +241,11 @@ impl AudioBridge {
                     // invert the signal here:
                     let control = -scaled;
 
-                    // info!("ctrl {}", control);
+
 
                     // Map control [-1, 1] to ratio range [min_ratio, max_ratio]
-                    let min_ratio = base_ratio * 0.995;
-                    let max_ratio = base_ratio * 1.005;
+                    let min_ratio = base_ratio * 0.985;
+                    let max_ratio = base_ratio * 1.015;
                     let t = (control + 1.0) * 0.5; // 0..1
                     let new_ratio = min_ratio + t * (max_ratio - min_ratio);
 
@@ -274,9 +258,39 @@ impl AudioBridge {
                         }
                     }
 
+                    loops = 1;
+                    if loops == 0 || filled > 1000_f64 {
+                        info!("filled {}; cap {}", filled, capacity);
+                        info!("ctrl {}", control);
+                        info!("resample ratio set: {}", new_ratio);
+
+                    }
+
+                    match resampler.process_into_buffer(&input, &mut output, None) {
+                        Ok((_used_in, produced_out)) => {
+                            let pushed = out_prod.push_slice(&out_buf[0][..produced_out]);
+                            if pushed < produced_out {
+
+                                let filled = out_prod.occupied_len() as f64;
+                                warn!(
+                                    "output ring full — dropped {} samples; filled {}",
+                                    produced_out - pushed,
+                                    filled,
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            warn!("rubato resample error: {err}");
+                            // thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                    }
+
                     if out_frames_next == 0 {
                         thread::sleep(Duration::from_micros(500));
                     }
+                    loops += 1;
+                    loops = loops % 500;
                 }
             })
         };

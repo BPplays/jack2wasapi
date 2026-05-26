@@ -194,13 +194,14 @@ impl AudioBridge {
                 let mut out_buf = vec![vec![0.0f32; output_frames_max]; 1];
                 let mut current_ratio = base_ratio;
 
+
                 while running.load(Ordering::Relaxed) {
                     for s in &mut in_buf[0] {
-                        match in_cons.try_pop() {
-                            Some(v) => *s = v,
-                            None => {
-                                thread::sleep(Duration::from_micros(500));
-                                continue;
+                        loop {
+                            if !running.load(Ordering::Relaxed) { return; }
+                            match in_cons.try_pop() {
+                                Some(v) => { *s = v; break; }
+                                None    => thread::sleep(Duration::from_micros(500)),
                             }
                         }
                     }

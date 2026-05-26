@@ -20,16 +20,12 @@ pub fn description_to_string(
     let desc = d?;
     let mut ext = desc.extended().to_owned();
 
-    if ext.len() <= 1 {
-        let first = ext.first().cloned();
-        match first {
-            Some(s) => {
-                return Ok(s)
-            }
-            None => {
-                return Err(DescStringErr::EmptyDescription)
-            }
-        }
+    if ext.is_empty() {
+        return Err(DescStringErr::EmptyDescription);
+    }
+
+    if ext.len() == 1 {
+        return Ok(ext[0].clone());
     }
 
     ext.sort();

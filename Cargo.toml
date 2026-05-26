@@ -20,3 +20,4 @@ ctrlc = "3.0"
 dioxus = { version = "0.7.9", features = ["desktop"] }
 dioxus-desktop = "0.7.9"
 thiserror = "2.0.18"
+rubato = "3.0.0"

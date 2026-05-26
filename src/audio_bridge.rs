@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -159,9 +160,13 @@ impl AudioBridge {
         let jack_client = client.activate_async((), jack_process)?;
         self.jack_client = Some(jack_client);
 
+        let out_cons = Arc::new(out_cons);
+        let out_cons_thread = Arc::clone(&out_cons);
         let running = self.is_running.clone();
         let resample_thread = {
             let output_underruns = output_underruns.clone();
+
+
 
             thread::spawn(move || {
                 let params = SincInterpolationParameters {
@@ -233,7 +238,8 @@ impl AudioBridge {
                         }
                     }
 
-                    let out_filled = out_cons.len();
+                    let out_filled = out_cons_thread.occupied_len();
+                    let out_filled = out_filled;
                     let midpoint = output_capacity_samples / 2;
                     let delta = out_filled as i64 - midpoint as i64; // + if above midpoint, - if below
                     let drift_ratio = delta as f64 / (output_capacity_samples / 2) as f64;
@@ -351,7 +357,7 @@ fn build_output_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
-    mut consumer: HeapCons<f32>,
+    mut consumer: Arc<HeapCons<f32>>,
     underruns: Arc<AtomicU64>,
     mut err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream, BuildStreamError>

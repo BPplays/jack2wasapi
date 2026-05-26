@@ -1,17 +1,40 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::fmt;
 
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{BufferSize, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24};
 use jack::{AudioIn, AsyncClient, Client, ClientOptions, Control, Port, ProcessScope};
 use log::{info, warn};
 use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
+use cpal::{FromSample};
 
 #[derive(Debug)]
 pub enum DescStringErr {
     DeviceName(cpal::DeviceNameError),
     EmptyDescription,
+}
+
+impl fmt::Display for DescStringErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DescStringErr::DeviceName(e) => {
+                write!(f, "failed to get device description: {e}")
+            }
+            DescStringErr::EmptyDescription => {
+                write!(f, "device description was empty")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DescStringErr {}
+
+impl From<cpal::DeviceNameError> for DescStringErr {
+    fn from(value: cpal::DeviceNameError) -> Self {
+        DescStringErr::DeviceName(value)
+    }
 }
 
 pub fn description_to_string(
@@ -107,6 +130,8 @@ impl AudioBridge {
 
         let stream = match sample_format {
             SampleFormat::F32 => build_output_stream::<f32>(&device, &config, consumer, err_fn)?,
+            SampleFormat::I24 => build_output_stream::<I24>(&device, &config, consumer, err_fn)?,
+            SampleFormat::U24 => build_output_stream::<U24>(&device, &config, consumer, err_fn)?,
             SampleFormat::I16 => build_output_stream::<i16>(&device, &config, consumer, err_fn)?,
             SampleFormat::U16 => build_output_stream::<u16>(&device, &config, consumer, err_fn)?,
             other => {

@@ -2522,6 +2522,7 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tray-icon 0.14.3",
 ]

@@ -94,80 +94,58 @@ impl AudioBridge {
             .output_devices()?
             .find_map(|device| {
                 let desc = description_to_string(device.description()).ok()?;
-                if desc == wanted_output {
-                    Some(device)
-                } else {
-                    None
-                }
+                if desc == wanted_output { Some(device) } else { None }
             })
-            .ok_or(AudioBridgeError::OutputDeviceNotFound)?;
+        .ok_or(AudioBridgeError::OutputDeviceNotFound)?;
 
-        info!(
-            "matched device: {}",
-            description_to_string(device.description())?
-        );
+        info!("matched device: {}", description_to_string(device.description())?);
+
+        // Connect to JACK *first* so we know the real sample rate.  // <-- FIX (moved up)
+        let (client, status) = Client::new("jack2wasapi", ClientOptions::default())?;
+        info!("connected to JACK: status={status:?}");
+
+        let jack_sr   = client.sample_rate() as u32;
+        let jack_period = client.buffer_size() as usize;   // <-- FIX: real JACK period
+        info!("jack sample_rate={jack_sr} buffer_size={jack_period}");
 
         let supported = device.default_output_config()?;
         let sample_format = supported.sample_format();
 
         let mut config: StreamConfig = supported.into();
+        config.sample_rate = jack_sr;   // <-- FIX: match JACK rate
         config.buffer_size = BufferSize::Fixed(buffer_size);
+        config.channels = 1;
 
         let channels = config.channels as usize;
 
-        // Small enough to stay low-latency, large enough to absorb brief scheduling jitter.
-        // Tune this if needed; 4x is a good starting point.
-        let ring_capacity_samples = (buffer_size as usize)
+        // Size the ring off the *JACK* period (the producer side), not the CPAL buffer.
+        // 8x gives ~170 ms headroom at 48 kHz / 1024 period — plenty for scheduling jitter.  // <-- FIX
+        let ring_capacity_samples = jack_period
             .saturating_mul(channels)
-            .saturating_mul(4);
+            .saturating_mul(8);
 
+        info!("rb samples: {}", ring_capacity_samples);
         let rb = HeapRb::<f32>::new(ring_capacity_samples);
         let (producer, consumer) = rb.split();
 
-        let (client, status) = Client::new("jack2wasapi", ClientOptions::default())?;
-        info!("connected to JACK: status={status:?}");
-        info!(
-            "jack sample_rate={} buffer_size={} (controlled by jack, not --buffer-size)",
-            client.sample_rate(),
-            client.buffer_size()
-        );
-
         let input_port = client.register_port("input", AudioIn::default())?;
-
-        let jack_process = JackProcess {
-            input_port,
-            producer,
-        };
-
+        let jack_process = JackProcess { input_port, producer };
         let jack_client = client.activate_async((), jack_process)?;
         self.jack_client = Some(jack_client);
 
         let err_fn = |err| warn!("CPAL stream error: {err}");
 
         let stream = match sample_format {
-            SampleFormat::F32 => {
-                build_output_stream::<f32>(&device, &config, channels, consumer, err_fn)?
-            }
-            SampleFormat::I24 => {
-                build_output_stream::<I24>(&device, &config, channels, consumer, err_fn)?
-            }
-            SampleFormat::U24 => {
-                build_output_stream::<U24>(&device, &config, channels, consumer, err_fn)?
-            }
-            SampleFormat::I16 => {
-                build_output_stream::<i16>(&device, &config, channels, consumer, err_fn)?
-            }
-            SampleFormat::U16 => {
-                build_output_stream::<u16>(&device, &config, channels, consumer, err_fn)?
-            }
-            _other => {
-                return Err(AudioBridgeError::UnsupportedCPALsampleFormat);
-            }
+            SampleFormat::F32 => build_output_stream::<f32>(&device, &config, channels, consumer, err_fn)?,
+            SampleFormat::I24 => build_output_stream::<I24>(&device, &config, channels, consumer, err_fn)?,
+            SampleFormat::U24 => build_output_stream::<U24>(&device, &config, channels, consumer, err_fn)?,
+            SampleFormat::I16 => build_output_stream::<i16>(&device, &config, channels, consumer, err_fn)?,
+            SampleFormat::U16 => build_output_stream::<u16>(&device, &config, channels, consumer, err_fn)?,
+            _other => return Err(AudioBridgeError::UnsupportedCPALsampleFormat),
         };
 
         stream.play()?;
         self.cpal_stream = Some(stream);
-
         Ok(())
     }
 
@@ -196,11 +174,11 @@ struct JackProcess {
 impl jack::ProcessHandler for JackProcess {
     fn process(&mut self, _client: &Client, ps: &ProcessScope) -> Control {
         let input = self.input_port.as_slice(ps);
-
-        // Batch push to reduce overhead in the real-time callback.
-        // If the ring buffer fills, push_slice returns how many samples were written.
-        let _written = self.producer.push_slice(input);
-
+        // info!("input is len: {}", input.len());
+        let written = self.producer.push_slice(input);
+        if written < input.len() {                          // <-- FIX: warn on overrun
+            warn!("ring buffer full — dropped {} samples", input.len() - written);
+        }
         Control::Continue
     }
 }

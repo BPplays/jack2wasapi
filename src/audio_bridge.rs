@@ -133,8 +133,8 @@ impl AudioBridge {
 
         let output_channels = config.channels as usize;
 
-        let input_capacity_samples = jack_period.saturating_mul(8).max(128);
-        let output_capacity_samples = jack_period.saturating_mul(16).max(128);
+        let input_capacity_samples = jack_period.saturating_mul(8).max(1024);
+        let output_capacity_samples = jack_period.saturating_mul(16).max(2048);
 
         info!(
             "base resample ratio={} (cpal_sr={} / jack_sr={})",
@@ -174,7 +174,7 @@ impl AudioBridge {
 
                 let mut resampler = match Async::<f32>::new_sinc(
                     base_ratio,
-                    1.01,
+                    1.055,
                     &params,
                     jack_period,
                     1,
@@ -234,9 +234,12 @@ impl AudioBridge {
                     let net = over as i64 - under as i64;
 
                     if net != 0 {
-                        let correction = 1.0 + (net as f64 * 1e-6);
+                        let drift_ratio = net as f64 / jack_period as f64;
+                        let correction = 1.0 + drift_ratio * 0.5;
                         let new_ratio = (base_ratio * correction)
-                            .clamp(base_ratio * 0.995, base_ratio * 1.005);
+                            .clamp(base_ratio * (
+                                1_f64 + (1_f64 - 1.05)
+                            ), base_ratio * 1.05);
 
                         if (new_ratio - current_ratio).abs() > 1e-9 {
                             if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {

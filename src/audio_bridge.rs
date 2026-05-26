@@ -1,18 +1,35 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{DeviceDescription,DeviceNameError};
 
-use log::{info,error,warn};
+use anyhow::{anyhow, Context, Result};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{BufferSize, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
+use jack::{AudioIn, AsyncClient, Client, ClientOptions, Control, Port, ProcessScope};
+use log::{info, warn};
+use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
+
+#[derive(Debug)]
+pub enum DescStringErr {
+    DeviceName(cpal::DeviceNameError),
+    EmptyDescription,
+}
 
 pub fn description_to_string(
-    d: Result<DeviceDescription, DeviceNameError>,
-) -> Result<String, DeviceNameError> {
+    d: Result<cpal::DeviceDescription, cpal::DeviceNameError>,
+) -> Result<String, DescStringErr> {
     let desc = d?;
     let mut ext = desc.extended().to_owned();
 
     if ext.len() <= 1 {
-        return Ok(ext.first().cloned().unwrap_or_default());
+        let first = ext.first().cloned();
+        match first {
+            Some(s) => {
+                return Ok(s)
+            }
+            None => {
+                return Err(DescStringErr::EmptyDescription)
+            }
+        }
     }
 
     ext.sort();
@@ -21,37 +38,28 @@ pub fn description_to_string(
 
 pub struct AudioBridge {
     is_running: Arc<AtomicBool>,
+    jack_client: Option<AsyncClient<(), JackProcess>>,
+    cpal_stream: Option<Stream>,
 }
 
 impl AudioBridge {
     pub fn new() -> Self {
-        AudioBridge {
+        Self {
             is_running: Arc::new(AtomicBool::new(false)),
+            jack_client: None,
+            cpal_stream: None,
         }
     }
 
-    pub fn start(&mut self, wanted_output: &str, buffer_size: u32) -> Result<(), Box<dyn std::error::Error>> {
-        // Set running flag to true
-        self.is_running.store(true, Ordering::Relaxed);
+    pub fn start(&mut self, wanted_output: &str, buffer_size: u32) -> Result<()> {
+        if self.is_running.swap(true, Ordering::Relaxed) {
+            return Ok(());
+        }
 
-        // In a full implementation, this would:
-        // 1. Connect to JACK server
-        // 2. Register JACK input port
-        // 3. Enumerate WASAPI devices
-        // 4. Open WASAPI output stream
-        // 5. Set up ring buffer between the two
-        // 6. Implement reconnection logic
-        // 7. Handle audio callbacks
-
-        // Placeholder showing what would happen in a proper implementation:
-        info!("Audio bridge configuration:");
-        info!("  Buffer size: {}", buffer_size);
-        info!("  JACK integration: Placeholder (would connect to JACK server)");
-        info!("  WASAPI output: {}", wanted_output);
         let host = cpal::default_host();
 
-        let selected = host
-            .output_devices()? // this is usually a Result<Devices, _>
+        let device = host
+            .output_devices()?
             .find_map(|device| {
                 let desc = description_to_string(device.description()).ok()?;
                 if desc == wanted_output {
@@ -59,30 +67,119 @@ impl AudioBridge {
                 } else {
                     None
                 }
-            });
+            })
+            .context("no matching CPAL output device found")?;
 
-        match selected {
-            Some(device) => {
-                println!("matched device: {}",
-                    description_to_string(device.description())
-                    .unwrap()
-                );
-                // use `device` here
-                }
-            None => {
-                println!("no matching device found");
-                }
-        }
+        info!(
+            "matched device: {}",
+            description_to_string(device.description())?
+        );
 
+        let supported = device.default_output_config()?;
+        let sample_format = supported.sample_format();
 
-        // This is where the actual bridge code would go
-        // For now, we just simulate starting it
+        let mut config: StreamConfig = supported.into();
+        config.buffer_size = BufferSize::Fixed(buffer_size);
+
+        let channels = config.channels as usize;
+        let ring_capacity_samples = (buffer_size as usize)
+            .saturating_mul(channels)
+            .saturating_mul(8);
+
+        let rb = HeapRb::<f32>::new(ring_capacity_samples);
+        let (producer, consumer) = rb.split();
+
+        let (client, status) = Client::new("jack2wasapi", ClientOptions::default())?;
+        info!("connected to JACK: status={status:?}");
+        info!(
+            "jack sample_rate={} buffer_size={}",
+            client.sample_rate(),
+            client.buffer_size()
+        );
+
+        let input_port = client.register_port("input", AudioIn::default())?;
+
+        let jack_process = JackProcess {
+            input_port,
+            producer,
+        };
+
+        let jack_client = client.activate_async((), jack_process)?;
+        self.jack_client = Some(jack_client);
+
+        let err_fn = |err| warn!("CPAL stream error: {err}");
+
+        let stream = match sample_format {
+            SampleFormat::F32 => build_output_stream::<f32>(&device, &config, consumer, err_fn)?,
+            SampleFormat::I16 => build_output_stream::<i16>(&device, &config, consumer, err_fn)?,
+            SampleFormat::U16 => build_output_stream::<u16>(&device, &config, consumer, err_fn)?,
+            other => {
+                return Err(anyhow!("unsupported CPAL sample format: {other:?}"));
+            }
+        };
+
+        stream.play()?;
+        self.cpal_stream = Some(stream);
 
         Ok(())
     }
 
     pub fn stop(&mut self) {
         self.is_running.store(false, Ordering::Relaxed);
+
+        if self.cpal_stream.take().is_some() {
+            info!("CPAL stream stopped");
+        }
+
+        if let Some(client) = self.jack_client.take() {
+            if let Err(err) = client.deactivate() {
+                warn!("failed to deactivate JACK client cleanly: {err}");
+            }
+        }
+
         info!("Audio bridge stopping...");
     }
+}
+
+struct JackProcess {
+    input_port: Port<AudioIn>,
+    producer: HeapProd<f32>,
+}
+
+impl jack::ProcessHandler for JackProcess {
+    fn process(&mut self, _client: &Client, ps: &ProcessScope) -> Control {
+        let input = self.input_port.as_slice(ps);
+
+        for &sample in input {
+            if self.producer.try_push(sample).is_err() {
+                break;
+            }
+        }
+
+        Control::Continue
+    }
+}
+
+fn build_output_stream<T>(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    mut consumer: HeapCons<f32>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<Stream>
+where
+    T: Sample + SizedSample + FromSample<f32> + Send + 'static,
+{
+    let stream = device.build_output_stream(
+        config,
+        move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
+            for out in data.iter_mut() {
+                let sample = consumer.try_pop().unwrap_or(0.0);
+                *out = T::from_sample(sample);
+            }
+        },
+        err_fn,
+        None,
+    )?;
+
+    Ok(stream)
 }

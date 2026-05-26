@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             error!("Failed to start audio bridge: {:?}", e);
-            return Err(e);
+            return Err(e.into());
         }
     };
 

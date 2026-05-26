@@ -1,14 +1,18 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
 use thiserror::Error;
 
-use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, BuildStreamError, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24};
+use cpal::{
+    BufferSize, BuildStreamError, DeviceDescription, DevicesError, FromSample, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24
+};
+
 use jack::{AudioIn, AsyncClient, Client, ClientOptions, Control, Port, ProcessScope};
+
 use log::{info, warn};
+
 use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
-use cpal::{FromSample};
 
 #[derive(Debug, Error)]
 pub enum DescStringErr {
@@ -21,7 +25,7 @@ pub enum DescStringErr {
 
 #[derive(Debug, Error)]
 pub enum AudioBridgeError {
-    #[error("device description was empty")]
+    #[error("unsupported sample format")]
     UnsupportedCPALsampleFormat,
 
     #[error("can't find output device")]
@@ -41,10 +45,13 @@ pub enum AudioBridgeError {
 
     #[error("DescStringErr: {0}")]
     DescStringErr(#[from] DescStringErr),
+
+    #[error("DevicesError: {0}")]
+    DevicesError(#[from] DevicesError),
 }
 
 pub fn description_to_string(
-    d: Result<cpal::DeviceDescription, cpal::DeviceNameError>,
+    d: Result<DeviceDescription, cpal::DeviceNameError>,
 ) -> Result<String, DescStringErr> {
     let desc = d?;
     let mut ext = desc.extended().to_owned();
@@ -76,11 +83,7 @@ impl AudioBridge {
         }
     }
 
-    pub fn start(
-        &mut self,
-        wanted_output: &str,
-        buffer_size: u32,
-    ) -> Result<(), AudioBridgeError> {
+    pub fn start(&mut self, wanted_output: &str, buffer_size: u32) -> Result<(), AudioBridgeError> {
         if self.is_running.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
@@ -88,7 +91,7 @@ impl AudioBridge {
         let host = cpal::default_host();
 
         let device = host
-            .output_devices().unwrap()
+            .output_devices()?
             .find_map(|device| {
                 let desc = description_to_string(device.description()).ok()?;
                 if desc == wanted_output {
@@ -96,7 +99,8 @@ impl AudioBridge {
                 } else {
                     None
                 }
-            }).ok_or(AudioBridgeError::OutputDeviceNotFound).unwrap();
+            })
+            .ok_or(AudioBridgeError::OutputDeviceNotFound)?;
 
         info!(
             "matched device: {}",
@@ -110,9 +114,12 @@ impl AudioBridge {
         config.buffer_size = BufferSize::Fixed(buffer_size);
 
         let channels = config.channels as usize;
+
+        // Small enough to stay low-latency, large enough to absorb brief scheduling jitter.
+        // Tune this if needed; 4x is a good starting point.
         let ring_capacity_samples = (buffer_size as usize)
             .saturating_mul(channels)
-            .saturating_mul(8);
+            .saturating_mul(4);
 
         let rb = HeapRb::<f32>::new(ring_capacity_samples);
         let (producer, consumer) = rb.split();
@@ -120,7 +127,7 @@ impl AudioBridge {
         let (client, status) = Client::new("jack2wasapi", ClientOptions::default())?;
         info!("connected to JACK: status={status:?}");
         info!(
-            "jack sample_rate={} buffer_size={}",
+            "jack sample_rate={} buffer_size={} (controlled by jack, not --buffer-size)",
             client.sample_rate(),
             client.buffer_size()
         );
@@ -138,11 +145,21 @@ impl AudioBridge {
         let err_fn = |err| warn!("CPAL stream error: {err}");
 
         let stream = match sample_format {
-            SampleFormat::F32 => build_output_stream::<f32>(&device, &config, consumer, err_fn)?,
-            SampleFormat::I24 => build_output_stream::<I24>(&device, &config, consumer, err_fn)?,
-            SampleFormat::U24 => build_output_stream::<U24>(&device, &config, consumer, err_fn)?,
-            SampleFormat::I16 => build_output_stream::<i16>(&device, &config, consumer, err_fn)?,
-            SampleFormat::U16 => build_output_stream::<u16>(&device, &config, consumer, err_fn)?,
+            SampleFormat::F32 => {
+                build_output_stream::<f32>(&device, &config, channels, consumer, err_fn)?
+            }
+            SampleFormat::I24 => {
+                build_output_stream::<I24>(&device, &config, channels, consumer, err_fn)?
+            }
+            SampleFormat::U24 => {
+                build_output_stream::<U24>(&device, &config, channels, consumer, err_fn)?
+            }
+            SampleFormat::I16 => {
+                build_output_stream::<i16>(&device, &config, channels, consumer, err_fn)?
+            }
+            SampleFormat::U16 => {
+                build_output_stream::<u16>(&device, &config, channels, consumer, err_fn)?
+            }
             _other => {
                 return Err(AudioBridgeError::UnsupportedCPALsampleFormat);
             }
@@ -180,11 +197,9 @@ impl jack::ProcessHandler for JackProcess {
     fn process(&mut self, _client: &Client, ps: &ProcessScope) -> Control {
         let input = self.input_port.as_slice(ps);
 
-        for &sample in input {
-            if self.producer.try_push(sample).is_err() {
-                break;
-            }
-        }
+        // Batch push to reduce overhead in the real-time callback.
+        // If the ring buffer fills, push_slice returns how many samples were written.
+        let _written = self.producer.push_slice(input);
 
         Control::Continue
     }
@@ -193,6 +208,7 @@ impl jack::ProcessHandler for JackProcess {
 fn build_output_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
+    channels: usize,
     mut consumer: HeapCons<f32>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream, BuildStreamError>
@@ -202,9 +218,15 @@ where
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
-            for out in data.iter_mut() {
+            // Fill per frame, not per raw sample.
+            // This avoids left/right interleaving crackle when the JACK side is mono.
+            for frame in data.chunks_mut(channels) {
                 let sample = consumer.try_pop().unwrap_or(0.0);
-                *out = T::from_sample(sample);
+                let v = T::from_sample(sample);
+
+                for out in frame.iter_mut() {
+                    *out = v;
+                }
             }
         },
         err_fn,

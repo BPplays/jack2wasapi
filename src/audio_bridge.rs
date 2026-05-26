@@ -1,40 +1,46 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::fmt;
+use thiserror::Error;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24};
+use cpal::{BufferSize, BuildStreamError, I24, Sample, SampleFormat, SizedSample, Stream, StreamConfig, U24};
 use jack::{AudioIn, AsyncClient, Client, ClientOptions, Control, Port, ProcessScope};
 use log::{info, warn};
 use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
 use cpal::{FromSample};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DescStringErr {
-    DeviceName(cpal::DeviceNameError),
+    #[error("failed to get device description: {0}")]
+    DeviceName(#[from] cpal::DeviceNameError),
+
+    #[error("device description was empty")]
     EmptyDescription,
 }
 
-impl fmt::Display for DescStringErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DescStringErr::DeviceName(e) => {
-                write!(f, "failed to get device description: {e}")
-            }
-            DescStringErr::EmptyDescription => {
-                write!(f, "device description was empty")
-            }
-        }
-    }
-}
+#[derive(Debug, Error)]
+pub enum AudioBridgeError {
+    #[error("device description was empty")]
+    UnsupportedCPALsampleFormat,
 
-impl std::error::Error for DescStringErr {}
+    #[error("can't find output device")]
+    OutputDeviceNotFound,
 
-impl From<cpal::DeviceNameError> for DescStringErr {
-    fn from(value: cpal::DeviceNameError) -> Self {
-        DescStringErr::DeviceName(value)
-    }
+    #[error("DefaultStreamConfigError: {0}")]
+    DefaultStreamConfigError(#[from] cpal::DefaultStreamConfigError),
+
+    #[error("PlayStreamError: {0}")]
+    PlayStreamError(#[from] cpal::PlayStreamError),
+
+    #[error("BuildStreamError: {0}")]
+    BuildStreamError(#[from] cpal::BuildStreamError),
+
+    #[error("jack error: {0}")]
+    JackErr(#[from] jack::Error),
+
+    #[error("DescStringErr: {0}")]
+    DescStringErr(#[from] DescStringErr),
 }
 
 pub fn description_to_string(
@@ -70,7 +76,11 @@ impl AudioBridge {
         }
     }
 
-    pub fn start(&mut self, wanted_output: &str, buffer_size: u32) -> Result<()> {
+    pub fn start(
+        &mut self,
+        wanted_output: &str,
+        buffer_size: u32,
+    ) -> Result<(), AudioBridgeError> {
         if self.is_running.swap(true, Ordering::Relaxed) {
             return Ok(());
         }
@@ -78,7 +88,7 @@ impl AudioBridge {
         let host = cpal::default_host();
 
         let device = host
-            .output_devices()?
+            .output_devices().unwrap()
             .find_map(|device| {
                 let desc = description_to_string(device.description()).ok()?;
                 if desc == wanted_output {
@@ -86,8 +96,7 @@ impl AudioBridge {
                 } else {
                     None
                 }
-            })
-            .context("no matching CPAL output device found")?;
+            }).ok_or(AudioBridgeError::OutputDeviceNotFound).unwrap();
 
         info!(
             "matched device: {}",
@@ -135,7 +144,7 @@ impl AudioBridge {
             SampleFormat::I16 => build_output_stream::<i16>(&device, &config, consumer, err_fn)?,
             SampleFormat::U16 => build_output_stream::<u16>(&device, &config, consumer, err_fn)?,
             other => {
-                return Err(anyhow!("unsupported CPAL sample format: {other:?}"));
+                return Err(AudioBridgeError::UnsupportedCPALsampleFormat);
             }
         };
 
@@ -186,7 +195,7 @@ fn build_output_stream<T>(
     config: &StreamConfig,
     mut consumer: HeapCons<f32>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<Stream>
+) -> Result<Stream, BuildStreamError>
 where
     T: Sample + SizedSample + FromSample<f32> + Send + 'static,
 {

@@ -135,7 +135,7 @@ impl AudioBridge {
         let output_channels = config.channels as usize;
 
         let input_capacity_samples = jack_period.saturating_mul(8).max(128);
-        let output_capacity_samples = jack_period.saturating_mul(16).max(128);
+        let output_capacity_samples = jack_period.saturating_mul(16).max(256);
 
         info!(
             "base resample ratio={} (cpal_sr={} / jack_sr={})",
@@ -237,19 +237,34 @@ impl AudioBridge {
                     }
 
                     // let out_filled = out_cons.occupied_len();
-                    let out_filled = in_cons.occupied_len();
-                    let out_filled = out_filled;
-                    let midpoint = output_capacity_samples / 2;
-                    let delta = out_filled as i64 - midpoint as i64; // + if above midpoint, - if below
-                    let drift_ratio = delta as f64 / (output_capacity_samples / 2) as f64;
 
-                    // drift_ratio > 0 → buffer filling → ratio too high → decrease
-                    // drift_ratio < 0 → buffer draining → ratio too low → increase
-                    let correction = 1.0 - drift_ratio * 0.5;
-                    let new_ratio = (base_ratio * correction).clamp(
-                        base_ratio * 0.995,
-                        base_ratio * 1.005
-                    );
+
+                    let filled = out_prod.occupied_len() as f64;
+                    let capacity = output_capacity_samples as f64;
+                    info!("filled {}; cap {}", filled, capacity);
+
+                    if capacity <= 0.0 {
+                        return;
+                    }
+
+                    // 0.0 = empty, 1.0 = full
+                    let fill = (filled / capacity).clamp(0.0, 1.0);
+
+                    // -1.0 = empty, 0.0 = half, 1.0 = full
+                    let scaled = fill * 2.0 - 1.0;
+
+                    // If you want empty buffer -> higher ratio, full buffer -> lower ratio,
+                    // invert the signal here:
+                    let control = -scaled;
+
+                    info!("ctrl {}", control);
+
+                    // Map control [-1, 1] to ratio range [min_ratio, max_ratio]
+                    let min_ratio = base_ratio * 0.995;
+                    let max_ratio = base_ratio * 1.005;
+                    let t = (control + 1.0) * 0.5; // 0..1
+                    let new_ratio = min_ratio + t * (max_ratio - min_ratio);
+
                     if (new_ratio - current_ratio).abs() > 1e-9 {
                         if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {
                             warn!("failed to retune resampler ratio: {err}");

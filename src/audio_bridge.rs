@@ -134,12 +134,18 @@ impl AudioBridge {
 
         let output_channels = config.channels as usize;
 
-        let input_capacity_samples = jack_period.saturating_mul(8).max(128);
-        let output_capacity_samples = jack_period.saturating_mul(16).max(256);
+        let input_cap_base = jack_period.max(buffer_size as usize);
+        let input_capacity_samples = input_cap_base.saturating_mul(3).min(99999);
+        let output_capacity_samples = jack_period.saturating_mul(32).min(99999);
 
         info!(
             "base resample ratio={} (cpal_sr={} / jack_sr={})",
             base_ratio, cpal_sr, jack_sr
+        );
+
+        info!(
+            "input samples: {}; output samples: {}",
+            input_capacity_samples, output_capacity_samples
         );
 
         let in_rb = HeapRb::<f32>::new(input_capacity_samples);
@@ -259,7 +265,7 @@ impl AudioBridge {
                     }
 
                     loops = 1;
-                    if loops == 0 || filled > 1000_f64 {
+                    if loops == 0 || filled > (capacity * 0.75) {
                         info!("filled {}; cap {}", filled, capacity);
                         info!("ctrl {}", control);
                         info!("resample ratio set: {}", new_ratio);

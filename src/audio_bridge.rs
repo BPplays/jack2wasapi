@@ -133,8 +133,8 @@ impl AudioBridge {
 
         let output_channels = config.channels as usize;
 
-        let input_capacity_samples = jack_period.saturating_mul(8).max(1024);
-        let output_capacity_samples = jack_period.saturating_mul(16).max(2048);
+        let input_capacity_samples = jack_period.saturating_mul(8).max(128);
+        let output_capacity_samples = jack_period.saturating_mul(16).max(128);
 
         info!(
             "base resample ratio={} (cpal_sr={} / jack_sr={})",
@@ -174,7 +174,7 @@ impl AudioBridge {
 
                 let mut resampler = match Async::<f32>::new_sinc(
                     base_ratio,
-                    1.055,
+                    1.056,
                     &params,
                     jack_period,
                     1,
@@ -201,7 +201,10 @@ impl AudioBridge {
                             if !running.load(Ordering::Relaxed) { return; }
                             match in_cons.try_pop() {
                                 Some(v) => { *s = v; break; }
-                                None    => thread::sleep(Duration::from_micros(500)),
+                                None    => {
+                                    thread::yield_now();
+                                    thread::sleep(Duration::from_micros(500))
+                                },
                             }
                         }
                     }
@@ -225,28 +228,29 @@ impl AudioBridge {
                         }
                         Err(err) => {
                             warn!("rubato resample error: {err}");
-                            thread::sleep(Duration::from_millis(1));
+                            // thread::sleep(Duration::from_millis(1));
                             continue;
                         }
                     }
 
                     let over = input_overruns.swap(0, Ordering::Relaxed);
                     let under = output_underruns.swap(0, Ordering::Relaxed);
-                    // let net = over as i64 - under as i64;
-                    let net = under as i64 - over as i64;
+                    let net = over as i64 - under as i64;
+                    // let net = under as i64 - over as i64;
 
                     if net != 0 {
                         let drift_ratio = net as f64 / jack_period as f64;
                         let correction = 1.0 + drift_ratio * 0.5;
                         let new_ratio = (base_ratio * correction)
                             .clamp(base_ratio * (
-                                1_f64 + (1_f64 - 1.05)
-                            ), base_ratio * 1.05);
+                                1_f64 + (1_f64 - 1.005)
+                            ), base_ratio * 1.005);
 
                         if (new_ratio - current_ratio).abs() > 1e-9 {
                             if let Err(err) = resampler.set_resample_ratio(new_ratio, true) {
                                 warn!("failed to retune resampler ratio: {err}");
                             } else {
+                                info!("resample ratio set: {}", new_ratio);
                                 current_ratio = new_ratio;
                             }
                         }

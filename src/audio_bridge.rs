@@ -143,7 +143,7 @@ impl AudioBridge {
             SampleFormat::U24 => build_output_stream::<U24>(&device, &config, consumer, err_fn)?,
             SampleFormat::I16 => build_output_stream::<i16>(&device, &config, consumer, err_fn)?,
             SampleFormat::U16 => build_output_stream::<u16>(&device, &config, consumer, err_fn)?,
-            other => {
+            _other => {
                 return Err(AudioBridgeError::UnsupportedCPALsampleFormat);
             }
         };

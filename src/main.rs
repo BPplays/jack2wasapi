@@ -25,7 +25,7 @@ struct Cli {
     output: String,
 
     /// Buffer size for audio (default 64)
-    #[clap(long, default_value = "64")]
+    #[clap(long, default_value = "128")]
     buffer_size: u32,
 
     #[arg(long)]
@@ -110,37 +110,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn setup_tray(session_name: &str, _is_running: &Arc<AtomicBool>) {
-    info!("Creating system tray icon for session: {}", session_name);
-
-    // This would be implemented with the actual tray-icon crate functionality
-    // For now we just log that it's ready
-    info!("System tray is ready with basic functionality");
-}
-
-fn get_config_dir(session: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let config_dir = dirs::config_dir()
-        .ok_or("Could not determine config directory")?;
-    let config_dir = config_dir.join("jack2wasapi").join(session);
-    std::fs::create_dir_all(&config_dir)?;
-    Ok(config_dir)
-}
-
-fn load_config(config_file: &std::path::Path) -> Result<Config, Box<dyn std::error::Error>> {
-    if config_file.exists() {
-        let contents = std::fs::read_to_string(config_file)?;
-        let config: Config = serde_json::from_str(&contents)?;
-        Ok(config)
-    } else {
-        Ok(Config {
-            device_name: None,
-            buffer_size: 64,
-        })
-    }
-}
-
-fn save_config(config_file: &std::path::Path, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    let contents = serde_json::to_vec_pretty(config)?;
-    std::fs::write(config_file, contents)?;
-    Ok(())
-}
